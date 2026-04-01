@@ -1,21 +1,21 @@
 {
-  "savedAt": "2026-04-01T16:07:51.112Z",
+  "savedAt": "2026-04-01T16:25:21.688Z",
   "roll": {
     "bones": {
-      "rarity": "white",
-      "rarityScore": 0,
+      "rarity": "gold",
+      "rarityScore": 50,
       "species": "ghost",
-      "eye": "-",
-      "hat": "none",
+      "eye": "O",
+      "hat": "halo",
       "shiny": false,
       "stats": {
         "DEBUGGING": 53,
-        "PATIENCE": 18,
-        "CHAOS": 3,
-        "WISDOM": 28,
-        "SNARK": 30
+        "PATIENCE": 71,
+        "CHAOS": 46,
+        "WISDOM": 34,
+        "SNARK": 85
       }
     },
-    "inspirationSeed": 406443936
+    "inspirationSeed": 394703317
   }
 }

@@ -2,7 +2,12 @@
 import readline from 'node:readline'
 import { roll, rollRandom, rollWithSeed, type Roll } from './companion.js'
 import { renderFace, renderSprite, spriteFrameCount } from './sprites.js'
-import { saveRollToFile } from './storage.js'
+import {
+  deleteSavedRollFile,
+  loadSavedRoll,
+  saveRollToFile,
+  type SavedRoll,
+} from './storage.js'
 import {
   EYES,
   HATS,
@@ -25,6 +30,21 @@ const RAINBOW_SEQUENCE = [
   '\x1b[35m',
 ]
 
+type AppSession = {
+  rl: readline.Interface
+  saveFile: string
+  saved: SavedRoll | null
+  animate: boolean
+}
+
+type SessionAction = {
+  key: string
+  label: string
+  description: string
+  when?: (session: AppSession) => boolean
+  run: (session: AppSession) => Promise<boolean>
+}
+
 function showHelp(): void {
   console.log(`
 Buddy CLI - 宠物生成器
@@ -41,17 +61,17 @@ Buddy CLI - 宠物生成器
   --list-species     列出所有物种
   --list-eyes        列出所有眼睛样式
   --list-hats        列出所有帽子
-  --animate          展示动画效果
+  --animate          显示动画预览
   -h, --help         显示帮助信息
 
 默认行为:
-  不传 --user / --seed / --once 时，会一直随机抽宠物，
-  直到你回答“这是你想要的宠物么？”并选择保存。
+  进入交互式菜单。
+  如果本地存在已保存的宠物文件，会在启动时自动加载。
 
 示例:
   buddy
   buddy --once
-  buddy --seed myseed
+  buddy --seed myseed --animate
   buddy --user alice --save-file ./data/my-buddy.json
 `)
 }
@@ -71,12 +91,42 @@ function listHats(): void {
   console.log(HATS.join(', '))
 }
 
-function displayBuddy(result: Roll, drawCount?: number): void {
+function colorizeText(value: string, rarity: Rarity): string {
+  if (rarity !== 'rainbow') {
+    return `${RARITY_ANSI_COLORS[rarity]}${value}${ANSI_RESET}`
+  }
+
+  let colorIndex = 0
+  let output = ''
+  for (const char of value) {
+    if (char === ' ') {
+      output += char
+      continue
+    }
+
+    output += `${RAINBOW_SEQUENCE[colorIndex % RAINBOW_SEQUENCE.length]}${char}`
+    colorIndex += 1
+  }
+
+  return `${output}${ANSI_RESET}`
+}
+
+function displayBuddy(
+  result: Roll,
+  options?: {
+    title?: string
+    subtitle?: string
+  },
+): void {
   const { bones, inspirationSeed } = result
 
   console.log('\n' + '='.repeat(40))
-  console.log(drawCount ? `🐾 第 ${drawCount} 抽` : '🐾 你的宠物')
+  console.log(options?.title ?? '🐾 你的宠物')
   console.log('='.repeat(40))
+
+  if (options?.subtitle) {
+    console.log(options.subtitle)
+  }
 
   console.log(`\n物种: ${bones.species}`)
   console.log(
@@ -101,30 +151,20 @@ function displayBuddy(result: Roll, drawCount?: number): void {
 
   console.log('\n精灵:')
   const sprite = renderSprite(bones, 0)
-  sprite.forEach(line =>
-    console.log('  ' + colorizeText(line, bones.rarity)),
-  )
+  sprite.forEach(line => console.log('  ' + colorizeText(line, bones.rarity)))
   console.log()
 }
 
-function colorizeText(value: string, rarity: Rarity): string {
-  if (rarity !== 'rainbow') {
-    return `${RARITY_ANSI_COLORS[rarity]}${value}${ANSI_RESET}`
-  }
-
-  let colorIndex = 0
-  let output = ''
-  for (const char of value) {
-    if (char === ' ') {
-      output += char
-      continue
-    }
-
-    output += `${RAINBOW_SEQUENCE[colorIndex % RAINBOW_SEQUENCE.length]}${char}`
-    colorIndex += 1
-  }
-
-  return `${output}${ANSI_RESET}`
+function showSavedSummary(saved: SavedRoll): void {
+  const savedAt = new Date(saved.savedAt).toLocaleString('zh-CN', {
+    hour12: false,
+  })
+  const { bones } = saved.roll
+  console.log('\n已加载本地宠物:')
+  console.log(
+    `  ${bones.species} / ${RARITY_LABELS[bones.rarity]} / 稀有值 ${bones.rarityScore}`,
+  )
+  console.log(`  保存时间: ${savedAt}`)
 }
 
 function printAnimationFrame(
@@ -133,41 +173,37 @@ function printAnimationFrame(
   frameCount: number,
 ): number {
   const sprite = renderSprite(bones, frame)
-  sprite.forEach(line =>
-    console.log('  ' + colorizeText(line, bones.rarity)),
-  )
+  sprite.forEach(line => console.log('  ' + colorizeText(line, bones.rarity)))
   console.log(`\n  帧 ${frame + 1}/${frameCount}`)
   return sprite.length + 2
 }
 
-async function playAnimation(bones: CompanionBones): Promise<void> {
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, ms)
+  })
+}
+
+async function playAnimation(
+  bones: CompanionBones,
+  loops = 3,
+): Promise<void> {
   const frameCount = spriteFrameCount(bones.species)
-  let frame = 0
+  const totalFrames = Math.max(1, frameCount * loops)
   let renderedLines = 0
 
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  })
-
-  console.log('\n按 Ctrl+C 退出动画。\n')
-  renderedLines = printAnimationFrame(bones, frame, frameCount)
-  frame = (frame + 1) % frameCount
-
-  const interval = setInterval(() => {
-    for (let index = 0; index < renderedLines; index++) {
-      process.stdout.write('\x1B[1A\x1B[2K')
+  for (let index = 0; index < totalFrames; index++) {
+    if (renderedLines > 0) {
+      for (let lineIndex = 0; lineIndex < renderedLines; lineIndex++) {
+        process.stdout.write('\x1B[1A\x1B[2K')
+      }
     }
 
-    renderedLines = printAnimationFrame(bones, frame, frameCount)
-    frame = (frame + 1) % frameCount
-  }, 500)
+    renderedLines = printAnimationFrame(bones, index % frameCount, frameCount)
+    await sleep(400)
+  }
 
-  rl.on('SIGINT', () => {
-    clearInterval(interval)
-    rl.close()
-    process.exit()
-  })
+  console.log('\n动画预览结束。')
 }
 
 function normalizeAnswer(answer: string): string {
@@ -210,74 +246,265 @@ async function askForDecision(
   }
 }
 
-async function saveSelectedRoll(result: Roll, saveFile: string): Promise<void> {
+async function saveSelectedRoll(result: Roll, saveFile: string): Promise<SavedRoll> {
   const savedPath = await saveRollToFile(result, saveFile)
+  const saved = await loadSavedRoll(saveFile)
+
+  if (!saved) {
+    throw new Error(`保存后未能重新加载文件: ${savedPath}`)
+  }
+
   console.log(`已保存到本地: ${savedPath}`)
+  return saved
 }
 
-async function huntFavoritePet(saveFile: string): Promise<Roll | null> {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  })
+async function huntFavoritePet(
+  rl: readline.Interface,
+  saveFile: string,
+): Promise<SavedRoll | null> {
+  let drawCount = 0
 
-  try {
-    let drawCount = 0
+  while (true) {
+    drawCount += 1
+    const result = rollRandom()
+    displayBuddy(result, { title: `🐾 第 ${drawCount} 抽` })
 
-    while (true) {
-      drawCount += 1
-      const result = rollRandom()
-      displayBuddy(result, drawCount)
+    const decision = await askForDecision(
+      rl,
+      '这是你想要的宠物么？[y/n/q]: ',
+    )
 
-      const decision = await askForDecision(
-        rl,
-        '这是你想要的宠物么？[y/n/q]: ',
-      )
-
-      if (decision === 'yes') {
-        await saveSelectedRoll(result, saveFile)
-        return result
-      }
-
-      if (decision === 'quit') {
-        console.log('已退出，本次没有保存宠物。')
-        return null
-      }
-
-      console.log('\n那就继续抽下一只吧...')
+    if (decision === 'yes') {
+      return saveSelectedRoll(result, saveFile)
     }
-  } finally {
-    rl.close()
+
+    if (decision === 'quit') {
+      console.log('已退出抽取，本次没有保存新宠物。')
+      return null
+    }
+
+    console.log('\n那就继续抽下一只吧...')
   }
 }
 
 async function promptToSaveRandomResult(
+  rl: readline.Interface,
   result: Roll,
   saveFile: string,
-): Promise<boolean> {
+): Promise<SavedRoll | null> {
+  const decision = await askForDecision(
+    rl,
+    '这是你想要的宠物么？[y/n/q]: ',
+  )
+
+  if (decision === 'yes') {
+    return saveSelectedRoll(result, saveFile)
+  }
+
+  if (decision === 'quit') {
+    console.log('已退出，本次没有保存宠物。')
+    return null
+  }
+
+  console.log('这次先不保存。')
+  return null
+}
+
+function createSessionActions(): SessionAction[] {
+  return [
+    {
+      key: 'v',
+      label: '查看已保存宠物',
+      description: '展示本地存档里的宠物详情',
+      when: session => session.saved !== null,
+      run: async session => {
+        if (!session.saved) {
+          console.log('当前没有已保存宠物。')
+          return true
+        }
+
+        displayBuddy(session.saved.roll, {
+          title: '🐾 当前已保存宠物',
+          subtitle: `保存文件: ${session.saveFile}`,
+        })
+        if (session.animate) {
+          await playAnimation(session.saved.roll.bones)
+        }
+        return true
+      },
+    },
+    {
+      key: 'h',
+      label: '开始抽宠物',
+      description: '连续抽取，直到你满意并保存',
+      run: async session => {
+        const saved = await huntFavoritePet(session.rl, session.saveFile)
+        if (saved) {
+          session.saved = saved
+          if (session.animate) {
+            await playAnimation(saved.roll.bones)
+          }
+        }
+        return true
+      },
+    },
+    {
+      key: 'o',
+      label: '随机抽一次',
+      description: '只看一只，决定是否覆盖保存',
+      run: async session => {
+        const result = rollRandom()
+        displayBuddy(result, { title: '🐾 单次抽取结果' })
+        const saved = await promptToSaveRandomResult(
+          session.rl,
+          result,
+          session.saveFile,
+        )
+        if (saved) {
+          session.saved = saved
+          if (session.animate) {
+            await playAnimation(saved.roll.bones)
+          }
+        }
+        return true
+      },
+    },
+    {
+      key: 'a',
+      label: '播放宠物动画',
+      description: '对已保存宠物播放动画预览',
+      when: session => session.saved !== null,
+      run: async session => {
+        if (!session.saved) {
+          console.log('当前没有可播放动画的宠物。')
+          return true
+        }
+
+        await playAnimation(session.saved.roll.bones)
+        return true
+      },
+    },
+    {
+      key: 'd',
+      label: '删除本地宠物',
+      description: '清空当前本地存档',
+      when: session => session.saved !== null,
+      run: async session => {
+        const decision = await askForDecision(
+          session.rl,
+          '确认删除本地宠物存档？[y/n]: ',
+        )
+
+        if (decision !== 'yes') {
+          console.log('已取消删除。')
+          return true
+        }
+
+        const deletedPath = await deleteSavedRollFile(session.saveFile)
+        session.saved = null
+        console.log(`已删除本地宠物存档: ${deletedPath}`)
+        return true
+      },
+    },
+    {
+      key: 'i',
+      label: '查看帮助',
+      description: '展示命令说明和模式说明',
+      run: async () => {
+        showHelp()
+        return true
+      },
+    },
+    {
+      key: 'q',
+      label: '退出',
+      description: '结束当前会话',
+      run: async () => false,
+    },
+  ]
+}
+
+function showSessionMenu(session: AppSession, actions: SessionAction[]): void {
+  console.log('\n' + '-'.repeat(40))
+  console.log('Buddy 终端菜单')
+  console.log('-'.repeat(40))
+  console.log(`存档文件: ${session.saveFile}`)
+
+  if (session.saved) {
+    const { bones } = session.saved.roll
+    console.log(
+      `当前存档: ${bones.species} / ${RARITY_LABELS[bones.rarity]} / 稀有值 ${bones.rarityScore}`,
+    )
+  } else {
+    console.log('当前存档: 暂无')
+  }
+
+  console.log('\n可执行操作:')
+  actions.forEach((action, index) => {
+    console.log(
+      `  ${index + 1}. [${action.key}] ${action.label} - ${action.description}`,
+    )
+  })
+}
+
+async function selectAction(
+  session: AppSession,
+  actions: SessionAction[],
+): Promise<SessionAction> {
+  while (true) {
+    const answer = normalizeAnswer(
+      await askQuestion(session.rl, '\n请选择操作（编号或快捷键）: '),
+    )
+
+    const byIndex = Number(answer)
+    if (Number.isInteger(byIndex) && byIndex >= 1 && byIndex <= actions.length) {
+      return actions[byIndex - 1]!
+    }
+
+    const byKey = actions.find(action => action.key === answer)
+    if (byKey) {
+      return byKey
+    }
+
+    console.log('无效操作，请重新输入。')
+  }
+}
+
+async function runInteractiveSession(
+  saveFile: string,
+  animate: boolean,
+): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
   })
 
+  const session: AppSession = {
+    rl,
+    saveFile,
+    saved: await loadSavedRoll(saveFile),
+    animate,
+  }
+
   try {
-    const decision = await askForDecision(
-      rl,
-      '这是你想要的宠物么？[y/n]: ',
-    )
-
-    if (decision === 'yes') {
-      await saveSelectedRoll(result, saveFile)
-      return true
+    console.log('\n欢迎来到 Buddy 命令行宠物中心。')
+    if (session.saved) {
+      showSavedSummary(session.saved)
+    } else {
+      console.log('\n当前没有已保存宠物，你可以开始抽取。')
     }
 
-    if (decision === 'quit') {
-      console.log('已退出，本次没有保存宠物。')
-      return false
+    const actionRegistry = createSessionActions()
+    let running = true
+
+    while (running) {
+      const actions = actionRegistry.filter(action => action.when?.(session) ?? true)
+      showSessionMenu(session, actions)
+      const action = await selectAction(session, actions)
+      running = await action.run(session)
     }
 
-    console.log('这次先不保存。')
-    return false
+    console.log('\n已退出 Buddy，会话结束。')
   } finally {
     rl.close()
   }
@@ -325,10 +552,7 @@ async function main(): Promise<void> {
   }
 
   if (!user && !seed && !once) {
-    const selected = await huntFavoritePet(saveFile)
-    if (animate && selected) {
-      await playAnimation(selected.bones)
-    }
+    await runInteractiveSession(saveFile, animate)
     return
   }
 
@@ -347,7 +571,16 @@ async function main(): Promise<void> {
   displayBuddy(result)
 
   if (!user && !seed) {
-    await promptToSaveRandomResult(result, saveFile)
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    })
+
+    try {
+      await promptToSaveRandomResult(rl, result, saveFile)
+    } finally {
+      rl.close()
+    }
   }
 
   if (animate) {

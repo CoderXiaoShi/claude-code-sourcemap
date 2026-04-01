@@ -1,0 +1,13 @@
+# Defensive npm publish ignore rules.
+# Note: `package.json` already limits publish contents via `files: ["dist"]`.
+
+src/
+scripts/
+*.ts
+tsconfig.json
+ARCHITECTURE.md
+buddy-pet.json
+tmp-buddy.json
+npminstall-debug.log
+dist/**/*.map
+*-pet.json

@@ -21,5 +21,5 @@ export {
 export type { Roll } from './companion.js'
 export { roll, rollRandom, rollWithSeed } from './companion.js'
 export type { SavedRoll } from './storage.js'
-export { saveRollToFile } from './storage.js'
+export { deleteSavedRollFile, loadSavedRoll, saveRollToFile } from './storage.js'
 export { renderFace, renderSprite, spriteFrameCount } from './sprites.js'
