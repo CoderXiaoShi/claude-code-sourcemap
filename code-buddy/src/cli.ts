@@ -45,6 +45,15 @@ type SessionAction = {
   run: (session: AppSession) => Promise<boolean>
 }
 
+function clearScreen(): void {
+  if (!process.stdout.isTTY) {
+    return
+  }
+
+  readline.cursorTo(process.stdout, 0, 0)
+  readline.clearScreenDown(process.stdout)
+}
+
 function showHelp(): void {
   console.log(`
 Buddy CLI - 宠物生成器
@@ -216,6 +225,13 @@ function askQuestion(rl: readline.Interface, question: string): Promise<string> 
   })
 }
 
+async function waitForContinue(
+  rl: readline.Interface,
+  prompt = '\n按回车返回菜单: ',
+): Promise<void> {
+  await askQuestion(rl, prompt)
+}
+
 function toDecision(answer: string): 'yes' | 'no' | 'quit' | null {
   if (['y', 'yes', '是', '好'].includes(answer)) {
     return 'yes'
@@ -266,6 +282,7 @@ async function huntFavoritePet(
 
   while (true) {
     drawCount += 1
+    clearScreen()
     const result = rollRandom()
     displayBuddy(result, { title: `🐾 第 ${drawCount} 抽` })
 
@@ -318,8 +335,10 @@ function createSessionActions(): SessionAction[] {
       description: '展示本地存档里的宠物详情',
       when: session => session.saved !== null,
       run: async session => {
+        clearScreen()
         if (!session.saved) {
           console.log('当前没有已保存宠物。')
+          await waitForContinue(session.rl)
           return true
         }
 
@@ -330,6 +349,7 @@ function createSessionActions(): SessionAction[] {
         if (session.animate) {
           await playAnimation(session.saved.roll.bones)
         }
+        await waitForContinue(session.rl)
         return true
       },
     },
@@ -338,6 +358,7 @@ function createSessionActions(): SessionAction[] {
       label: '开始抽宠物',
       description: '连续抽取，直到你满意并保存',
       run: async session => {
+        clearScreen()
         const saved = await huntFavoritePet(session.rl, session.saveFile)
         if (saved) {
           session.saved = saved
@@ -353,6 +374,7 @@ function createSessionActions(): SessionAction[] {
       label: '随机抽一次',
       description: '只看一只，决定是否覆盖保存',
       run: async session => {
+        clearScreen()
         const result = rollRandom()
         displayBuddy(result, { title: '🐾 单次抽取结果' })
         const saved = await promptToSaveRandomResult(
@@ -375,12 +397,15 @@ function createSessionActions(): SessionAction[] {
       description: '对已保存宠物播放动画预览',
       when: session => session.saved !== null,
       run: async session => {
+        clearScreen()
         if (!session.saved) {
           console.log('当前没有可播放动画的宠物。')
+          await waitForContinue(session.rl)
           return true
         }
 
         await playAnimation(session.saved.roll.bones)
+        await waitForContinue(session.rl)
         return true
       },
     },
@@ -390,6 +415,7 @@ function createSessionActions(): SessionAction[] {
       description: '清空当前本地存档',
       when: session => session.saved !== null,
       run: async session => {
+        clearScreen()
         const decision = await askForDecision(
           session.rl,
           '确认删除本地宠物存档？[y/n]: ',
@@ -397,12 +423,14 @@ function createSessionActions(): SessionAction[] {
 
         if (decision !== 'yes') {
           console.log('已取消删除。')
+          await waitForContinue(session.rl)
           return true
         }
 
         const deletedPath = await deleteSavedRollFile(session.saveFile)
         session.saved = null
         console.log(`已删除本地宠物存档: ${deletedPath}`)
+        await waitForContinue(session.rl)
         return true
       },
     },
@@ -410,8 +438,10 @@ function createSessionActions(): SessionAction[] {
       key: 'i',
       label: '查看帮助',
       description: '展示命令说明和模式说明',
-      run: async () => {
+      run: async session => {
+        clearScreen()
         showHelp()
+        await waitForContinue(session.rl)
         return true
       },
     },
@@ -428,7 +458,7 @@ function showSessionMenu(session: AppSession, actions: SessionAction[]): void {
   console.log('\n' + '-'.repeat(40))
   console.log('Buddy 终端菜单')
   console.log('-'.repeat(40))
-  console.log(`存档文件: ${session.saveFile}`)
+  // console.log(`存档文件: ${session.saveFile}`)
 
   if (session.saved) {
     const { bones } = session.saved.roll
@@ -487,6 +517,7 @@ async function runInteractiveSession(
   }
 
   try {
+    clearScreen()
     console.log('\n欢迎来到 Buddy 命令行宠物中心。')
     if (session.saved) {
       showSavedSummary(session.saved)
@@ -496,12 +527,17 @@ async function runInteractiveSession(
 
     const actionRegistry = createSessionActions()
     let running = true
+    let shouldClearMenu = false
 
     while (running) {
       const actions = actionRegistry.filter(action => action.when?.(session) ?? true)
+      if (shouldClearMenu) {
+        clearScreen()
+      }
       showSessionMenu(session, actions)
       const action = await selectAction(session, actions)
       running = await action.run(session)
+      shouldClearMenu = true
     }
 
     console.log('\n已退出 Buddy，会话结束。')
