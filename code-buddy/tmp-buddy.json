@@ -1,0 +1,21 @@
+{
+  "savedAt": "2026-04-01T15:39:42.634Z",
+  "roll": {
+    "bones": {
+      "rarity": "white",
+      "level": 0,
+      "species": "owl",
+      "eye": "@",
+      "hat": "none",
+      "shiny": false,
+      "stats": {
+        "DEBUGGING": 10,
+        "PATIENCE": 10,
+        "CHAOS": 1,
+        "WISDOM": 47,
+        "SNARK": 26
+      }
+    },
+    "inspirationSeed": 956630576
+  }
+}

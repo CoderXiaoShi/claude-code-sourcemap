@@ -1,0 +1,35 @@
+{
+  "name": "sxl-code-buddy",
+  "version": "0.0.1",
+  "public": true,
+  "description": "A simple CLI for generating and displaying buddy sprites",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "buddy": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node ./scripts/add-shebang.mjs",
+    "prepack": "npm run build",
+    "watch": "tsc -p tsconfig.json -w",
+    "start": "node ./dist/cli.js",
+    "help": "node ./dist/cli.js --help"
+  },
+  "files": [
+    "dist"
+  ],
+  "devDependencies": {
+    "@types/node": "22.0.0",
+    "typescript": "5.6.2"
+  },
+  "keywords": ["buddy", "sprite", "cli"],
+  "author": "",
+  "license": "MIT"
+}

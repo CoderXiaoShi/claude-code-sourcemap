@@ -1,0 +1,21 @@
+{
+  "savedAt": "2026-04-01T16:07:51.112Z",
+  "roll": {
+    "bones": {
+      "rarity": "white",
+      "rarityScore": 0,
+      "species": "ghost",
+      "eye": "-",
+      "hat": "none",
+      "shiny": false,
+      "stats": {
+        "DEBUGGING": 53,
+        "PATIENCE": 18,
+        "CHAOS": 3,
+        "WISDOM": 28,
+        "SNARK": 30
+      }
+    },
+    "inspirationSeed": 406443936
+  }
+}
