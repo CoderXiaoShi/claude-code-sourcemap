@@ -1,0 +1,17 @@
+{
+  "name": "buddy-cli",
+  "version": "1.0.0",
+  "description": "A simple CLI for generating and displaying buddy sprites",
+  "type": "module",
+  "main": "cli.js",
+  "bin": {
+    "buddy": "./cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js",
+    "help": "node cli.js --help"
+  },
+  "keywords": ["buddy", "sprite", "cli"],
+  "author": "",
+  "license": "MIT"
+}
