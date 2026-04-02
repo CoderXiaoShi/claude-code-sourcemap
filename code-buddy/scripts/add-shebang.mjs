@@ -1,17 +1,21 @@
 import fs from 'node:fs/promises'
 
-const CLI_PATH = new URL('../dist/cli.js', import.meta.url)
 const SHEBANG = '#!/usr/bin/env node\n'
+const TARGETS = [
+  new URL('../dist/cli.js', import.meta.url),
+  new URL('../dist/lan-server.js', import.meta.url),
+]
 
-let contents
-try {
-  contents = await fs.readFile(CLI_PATH, 'utf8')
-} catch (err) {
-  const msg = err instanceof Error ? err.message : String(err)
-  throw new Error(`Failed to read ${CLI_PATH.pathname}: ${msg}`)
+for (const target of TARGETS) {
+  let contents
+  try {
+    contents = await fs.readFile(target, 'utf8')
+  } catch (err) {
+    // dist entry may not exist in some builds; skip.
+    continue
+  }
+
+  if (!contents.startsWith('#!')) {
+    await fs.writeFile(target, SHEBANG + contents, 'utf8')
+  }
 }
-
-if (!contents.startsWith('#!')) {
-  await fs.writeFile(CLI_PATH, SHEBANG + contents, 'utf8')
-}
-

@@ -17,9 +17,10 @@
 
 ### 2.2 非目标
 
-- 不涉及网络通信、数据库、服务端存储
+- 核心离线玩法不依赖网络；联机能力仅面向局域网（LAN）
+- 不涉及数据库、互联网服务端存储
 - 不提供图形界面，仅面向终端输出
-- 不做复杂命令解析、插件机制或状态持久化
+- 不做复杂命令解析、插件机制或服务端状态持久化（但支持本地 JSON 存档）
 
 ## 3. 总体架构
 
@@ -28,18 +29,26 @@
 1. **CLI 入口层**：处理命令行参数、控制输出和动画生命周期
 2. **领域生成层**：基于确定性随机算法生成 Buddy 属性
 3. **渲染层**：将 Buddy 属性映射为 ASCII 表情和 Sprite 帧
-4. **类型与常量层**：统一维护物种、稀有度、眼睛、帽子、属性等枚举和类型
-5. **构建发布层**：将 TypeScript 编译为 `dist`，补充 shebang 后作为 npm CLI 包发布
+4. **本地存档层**：将 Buddy 结果以 JSON 形式保存 / 读取 / 删除
+5. **类型与常量层**：统一维护物种、稀有度、眼睛、帽子、属性等枚举和类型
+6. **构建发布层**：将 TypeScript 编译为 `dist`，补充 shebang 后作为 npm CLI 包发布
+7. **局域网联机层（可选）**：提供可独立部署的 LAN 服务器（房间 / 用户列表），以及 CLI 侧的发现与加入流程
 
 可用下图理解主链路：
 
 ```mermaid
 flowchart LR
-    A[CLI 参数\n--user --seed --animate] --> B[src/cli.ts]
-    B --> C[src/companion.ts\n生成 Buddy 数据]
-    C --> D[src/types.ts\n常量与类型]
+    A[CLI 参数\n--user --seed --once --save-file --animate] --> B[src/cli.ts]
+    B --> C[src/companion.ts\n生成 Roll/Bones]
     B --> E[src/sprites.ts\n渲染表情与 Sprite]
+    B --> S[src/storage.ts\n本地存档 JSON]
+    B --> O[src/online.ts\n联机菜单/发现/加入]
+    C --> D[src/types.ts\n常量与类型]
     E --> D
+    S --> D
+    S --> J[(buddy-pet.json)]
+    O --> L[src/server/*.ts\nLAN 协议/客户端/服务端/扫描]
+    L --> P[dist/lan-server.js\npm2 托管]
     B --> F[stdout 终端输出]
     G[tsc 构建] --> H[dist/*.js]
     I[scripts/add-shebang.mjs] --> H
@@ -53,11 +62,12 @@ flowchart LR
 
 CLI 主入口，职责包括：
 
-- 解析命令行参数：`--user`、`--seed`、`--list-species`、`--list-eyes`、`--list-hats`、`--animate`
-- 调用 `roll` / `rollWithSeed` 生成 Buddy
+- 解析命令行参数：`--user`、`--seed`、`--once`、`--save-file`、`--list-species`、`--list-eyes`、`--list-hats`、`--animate`
+- 默认进入交互式菜单模式（当未传入 `--user` / `--seed` / `--once` 时）
+- 调用 `roll` / `rollWithSeed` / `rollRandom` 生成 Buddy
 - 调用 `renderFace` / `renderSprite` 输出文本与 ASCII 图像
-- 在 `--animate` 场景下通过 `setInterval` 驱动动画帧刷新
-- 负责帮助信息、列表命令和终端交互生命周期
+- 在 `--animate` 场景下通过循环 + `sleep` 驱动动画，并用 ANSI 光标控制覆盖上一帧
+- 通过 `storage` 模块进行本地存档的加载 / 保存 / 删除
 
 该模块是**编排层**，不直接承载复杂业务规则，主要负责串联其它纯函数模块。
 
@@ -71,6 +81,7 @@ Buddy 生成核心模块，职责包括：
 - 根据稀有度和规则生成数值属性 `rollStats`
 - 组装完整 `CompanionBones`
 - 对 `userId` 生成路径提供单项缓存 `rollCache`
+- 提供非确定性的随机抽取 `rollRandom`（基于时间戳与 `randomUUID()` 组合作为种子）
 
 这是项目的**领域核心模块**，决定“同一个输入生成同一个 Buddy”的确定性行为。
 
@@ -91,7 +102,7 @@ ASCII 渲染模块，职责包括：
 统一的类型和运行时常量定义，职责包括：
 
 - 定义 `Rarity`、`Species`、`Eye`、`Hat`、`StatName`、`CompanionBones`
-- 定义 `RARITY_WEIGHTS`、`RARITY_STARS`、`STAT_NAMES`
+- 定义 `RARITY_WEIGHTS`、`RARITY_SCORES`、`RARITY_LABELS`、`RARITY_BADGES`、`RARITY_ANSI_COLORS`、`STAT_NAMES`
 - 定义 `SPECIES`、`EYES`、`HATS`
 - 通过 `String.fromCharCode` 运行时构造物种字符串
 
@@ -106,6 +117,43 @@ ASCII 渲染模块，职责包括：
 - 渲染 API
 
 该模块让项目除 CLI 外，还能作为一个可导入的 npm 库被外部代码复用。
+
+#### `src/storage.ts`
+
+本地存档模块，职责包括：
+
+- 将 `Roll` 以 JSON 形式写入本地文件（默认 `./buddy-pet.json`）
+- 从本地文件读取并解析存档
+- 删除本地存档文件
+- 对历史存档结构做兼容归一化（例如 `rarityScore` / `level` 字段）
+
+#### `src/online.ts`
+
+联机入口（CLI 侧），职责包括：
+
+- 在交互式 CLI 中提供“联机服务”菜单入口
+- 扫描局域网 IP（默认 `/24`）以发现同协议的 Buddy LAN 服务器
+- 作为客户端加入指定服务器，并提供基础的房间/用户列表操作
+- 支持在本地同进程临时开启一个 LAN 服务器（便于开发与演示）
+
+#### `src/lan-server.ts`
+
+LAN 服务器进程入口（可由 pm2 托管），职责包括：
+
+- 启动 `createBuddyLanServer()` 并监听 `4432`
+- 支持通过命令行参数或环境变量配置 `HOST` / `PORT` / `NAME`
+- 处理 `SIGINT` / `SIGTERM` 做优雅退出
+
+#### `src/server/*.ts`
+
+局域网联机模块（可复用的通用服务端/客户端实现），职责包括：
+
+- `protocol.ts`：消息协议与数据结构（NDJSON over TCP）
+- `ndjson.ts`：NDJSON 编解码（按行 JSON）
+- `rooms.ts`：房间注册表（创建/加入/离开、空房间回收）
+- `server.ts`：LAN 服务器实现（用户列表、房间广播、请求响应）
+- `client.ts`：LAN 客户端实现（请求/响应、状态更新）
+- `discovery.ts`：局域网扫描发现（对 `4432` 端口进行并发探测）
 
 ### 4.2 构建脚本
 
@@ -126,6 +174,7 @@ ASCII 渲染模块，职责包括：
 ```ts
 type CompanionBones = {
   rarity: Rarity
+  rarityScore: number
   species: Species
   eye: Eye
   hat: Hat
@@ -136,7 +185,8 @@ type CompanionBones = {
 
 字段含义：
 
-- `rarity`：稀有度，决定展示星级，也影响属性下限
+- `rarity`：稀有度，决定徽章/颜色展示，也影响属性下限
+- `rarityScore`：稀有度分数（用于展示与存档兼容）
 - `species`：物种，决定使用哪一组 Sprite 模板
 - `eye`：眼睛字符，参与表情和 Sprite 替换
 - `hat`：帽子装饰，叠加到 Sprite 首行
@@ -150,7 +200,15 @@ type CompanionBones = {
 
 ## 6. 核心运行流程
 
-### 6.1 静态展示流程
+### 6.1 交互式菜单流程（默认行为）
+
+当未传入 `--user` / `--seed` / `--once` 时，CLI 会：
+
+1. 尝试从 `--save-file`（默认 `./buddy-pet.json`）加载本地存档
+2. 展示交互式菜单（查看已保存、连续抽取、单次抽取、播放动画、删除存档、帮助等）
+3. 在“抽取”流程中调用 `rollRandom()` 生成候选 Buddy，并按用户选择决定是否写入存档
+
+### 6.2 单次展示流程（带参数运行）
 
 ```text
 命令行输入
@@ -162,17 +220,23 @@ type CompanionBones = {
   -> 打印到终端
 ```
 
-### 6.2 动画流程
+补充说明：
+
+- `--user <id>`：调用 `roll(userId)`（确定性）
+- `--seed <seed>`：调用 `rollWithSeed(seed)`（确定性）
+- `--once`：调用 `rollRandom()`（非确定性；输出后会询问是否保存）
+
+### 6.3 动画流程
 
 当用户传入 `--animate` 时：
 
 1. 使用 `spriteFrameCount(species)` 获取当前物种总帧数
-2. 通过 `setInterval(500ms)` 周期性刷新
-3. 每次重新调用 `renderSprite(bones, frame)`
-4. 使用 ANSI 光标控制回退并覆盖已输出内容
-5. 用户按 `Ctrl+C` 后清理 interval 并退出
+2. 每帧调用 `renderSprite(bones, frame)` 得到当前帧
+3. 通过 ANSI 光标控制逐行回退并清除上一帧内容
+4. `sleep(400ms)` 后渲染下一帧
+5. 默认播放固定轮数后结束（无需常驻定时器）
 
-### 6.3 确定性生成流程
+### 6.4 确定性生成流程
 
 1. 输入字符串（`userId + SALT` 或 `seed`）
 2. `hashString` 将字符串转换为 32 位整数
@@ -187,6 +251,14 @@ type CompanionBones = {
    - inspirationSeed
 
 因此，只要输入相同，生成结果就稳定一致。
+
+### 6.5 局域网联机流程（可选）
+
+联机基于 **TCP + NDJSON（按行 JSON）** 的轻量协议，默认端口为 `4432`：
+
+1. **发现**：客户端向局域网广播 UDP `probe`（默认端口 `4432`），服务端以 UDP `probe_result` 响应（包含服务器名、在线人数、房间数）；若广播受限则回退为 TCP 扫描同网段 `/24` 探测
+2. **加入**：客户端连接目标服务器并发送 `hello`，服务端返回 `welcome`（包含当前用户列表与房间列表）
+3. **房间**：客户端可 `create_room` / `join_room` / `leave_room`；服务端会广播 `users_update` / `rooms_update` 给所有连接
 
 ## 7. 设计特点与关键约束
 

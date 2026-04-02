@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
 import { roll, rollRandom, rollWithSeed, type Roll } from './companion.js'
+import { runOnlineMenu } from './online.js'
 import { renderFace, renderSprite, spriteFrameCount } from './sprites.js'
 import {
   deleteSavedRollFile,
@@ -406,6 +407,16 @@ function createSessionActions(): SessionAction[] {
 
         await playAnimation(session.saved.roll.bones)
         await waitForContinue(session.rl)
+        return true
+      },
+    },
+    {
+      key: 'n',
+      label: '局域网联机',
+      description: '加入局域网 / 开启服务',
+      run: async session => {
+        clearScreen()
+        await runOnlineMenu(session.rl)
         return true
       },
     },

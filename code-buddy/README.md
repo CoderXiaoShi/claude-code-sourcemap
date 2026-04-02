@@ -93,6 +93,33 @@ buddy --save-file ./data/my-buddy.json
 
 ---
 
+## LAN Online (Experimental)
+
+This project includes an optional LAN server (TCP/NDJSON) on port `4432`.
+
+Start server:
+```bash
+buddy-server
+```
+
+Join/host from the client:
+- Run `buddy` and choose `Online / LAN` in the interactive menu.
+
+### pm2 Hosting
+
+Build first:
+```bash
+npm run build
+```
+
+Start with pm2:
+```bash
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+---
+
 ## CLI Options
 
 | 参数 | 说明 |
@@ -235,4 +262,3 @@ npm start
 ## License
 
 MIT
-
