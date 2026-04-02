@@ -1,6 +1,6 @@
 {
   "name": "sxl-code-buddy",
-  "version": "0.0.1",
+  "version": "0.0.3",
   "public": true,
   "description": "A simple CLI for generating and displaying buddy sprites",
   "type": "module",
