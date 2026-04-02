@@ -483,7 +483,7 @@ function showSessionMenu(session: AppSession, actions: SessionAction[]): void {
   console.log('\n可执行操作:')
   actions.forEach((action, index) => {
     console.log(
-      `  ${index + 1}. [${action.key}] ${action.label} - ${action.description}`,
+      `  [${action.key}] ${action.label} - ${action.description}`,
     )
   })
 }
