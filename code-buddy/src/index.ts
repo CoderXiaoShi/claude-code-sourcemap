@@ -20,8 +20,6 @@ export {
 } from './types.js'
 export type { Roll } from './companion.js'
 export { roll, rollRandom, rollWithSeed } from './companion.js'
-export type { SavedRoll } from './storage.js'
-export { deleteSavedRollFile, loadSavedRoll, saveRollToFile } from './storage.js'
 export { renderFace, renderSprite, spriteFrameCount } from './sprites.js'
 
 export type { BuddyLanServer, BuddyLanServerOptions } from './server/server.js'
@@ -31,3 +29,4 @@ export { BuddyLanClient } from './server/client.js'
 export type { DiscoveredServer, ScanOptions } from './server/discovery.js'
 export { scanLanForBuddyServers } from './server/discovery.js'
 export { probeBuddyServerTcp } from './server/probe.js'
+export type { GameInfo, GameStateSnapshot, GameType, RoomInfo } from './server/protocol.js'

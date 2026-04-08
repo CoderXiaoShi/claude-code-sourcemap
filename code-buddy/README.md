@@ -7,11 +7,16 @@
 - **确定性生成**：同 `userId` / `seed` 生成结果稳定一致
 - **ASCII 展示**：属性、表情与多帧精灵（可选动画预览）
 - **交互式菜单**：默认启动进入菜单，更适合日常使用
-- **本地存档**：保存/读取/删除 `buddy-pet.json`（可自定义路径）
 - **局域网联机（可选）**
   - UDP 广播发现服务器（必要时回退 TCP 探测）
   - 房间功能 + 用户列表
   - 本机可用 `pm2` 常驻托管独立服务端进程
+- **服务端权威游戏架构**
+  - 房间、准备、选游戏、开局都由服务端管理
+  - 游戏命令由服务端计算并广播状态
+- **当前已启用迷宫玩法**
+  - 双人房间准备后开局
+  - 客户端只负责输入与渲染
 
 ## 安装
 
@@ -59,20 +64,13 @@ buddy --user alice
 buddy --seed myseed --animate
 ```
 
-指定本地存档文件：
-
-```bash
-buddy --save-file ./data/my-buddy.json
-```
-
 ## 交互式菜单说明
 
 运行 `buddy` 后，菜单一般包含：
 
-- 查看已保存宠物 / 单次抽取 / 连续抽取
+- 查看当前宠物 / 单次抽取 / 连续抽取
 - 播放宠物动画
-- 删除本地宠物存档
-- **局域网联机**：加入局域网 / 本机开服（pm2 常驻）/ 查看状态 / 停止服务
+- **局域网联机**：加入局域网 / 建房 / 选迷宫 / 准备 / 开始 / 进入游戏
 
 ## 局域网联机（LAN）
 
@@ -124,7 +122,6 @@ pm2 stop code-buddy-lan
 | `--user <id>` | 基于用户 ID 稳定生成 |
 | `--seed <seed>` | 基于 seed 复现同一只 |
 | `--once` | 随机生成一只 |
-| `--save-file <path>` | 指定本地存档文件路径 |
 | `--list-species` | 查看支持的物种 |
 | `--list-eyes` | 查看支持的眼睛样式 |
 | `--list-hats` | 查看支持的帽子样式 |
@@ -140,8 +137,6 @@ import {
   rollWithSeed,
   renderFace,
   renderSprite,
-  saveRollToFile,
-  loadSavedRoll,
   // LAN (optional)
   BuddyLanClient,
   scanLanForBuddyServers,
@@ -155,10 +150,6 @@ console.log(fixed.bones.species)
 console.log(renderFace(seeded.bones))
 console.log(renderSprite(random.bones).join('\n'))
 
-await saveRollToFile(random, './buddy-pet.json')
-const saved = await loadSavedRoll('./buddy-pet.json')
-console.log(saved?.roll.bones.rarity)
-
 const servers = await scanLanForBuddyServers()
 if (servers[0]) {
   const client = await BuddyLanClient.connect({
@@ -167,6 +158,7 @@ if (servers[0]) {
     name: 'alice',
   })
   console.log(client.state.rooms)
+  console.log(client.state.games)
   client.close()
 }
 ```
@@ -200,4 +192,3 @@ npm start
 ## License
 
 MIT
-

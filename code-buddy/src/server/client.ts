@@ -8,6 +8,11 @@ import {
   getMessageType,
   type AnyMessage,
   type ErrorMessage,
+  type GameCommand,
+  type GameEventMessage,
+  type GameInfo,
+  type GameStarted,
+  type GameStateSnapshot,
   type RoomInfo,
   type RoomsResponse,
   type ServerInfo,
@@ -21,6 +26,8 @@ export type BuddyLanClientState = {
   you: UserInfo
   users: UserInfo[]
   rooms: RoomInfo[]
+  games: GameInfo[]
+  activeGames: Record<string, GameStateSnapshot>
 }
 
 export type BuddyLanClientOptions = {
@@ -57,6 +64,7 @@ export class BuddyLanClient extends EventEmitter {
     super()
     this.#socket = socket
     this.#state = state
+    this.on('error', () => {})
   }
 
   get state(): BuddyLanClientState {
@@ -154,6 +162,8 @@ export class BuddyLanClient extends EventEmitter {
       you: welcome.you,
       users: welcome.users,
       rooms: welcome.rooms,
+      games: welcome.games,
+      activeGames: {},
     })
     client.#wireSocket()
     return client
@@ -202,6 +212,29 @@ export class BuddyLanClient extends EventEmitter {
       const roomId = (raw as { roomId: string | null }).roomId
       this.#state = { ...this.#state, you: { ...this.#state.you, roomId } }
       this.emit('joined_room', roomId)
+      return
+    }
+
+    if (type === 'game_state') {
+      const snapshot = raw as GameStateSnapshot
+      this.#state = {
+        ...this.#state,
+        activeGames: {
+          ...this.#state.activeGames,
+          [snapshot.roomId]: snapshot,
+        },
+      }
+      this.emit('game_state', snapshot)
+      return
+    }
+
+    if (type === 'game_started') {
+      this.emit('game_started', raw as GameStarted)
+      return
+    }
+
+    if (type === 'game_event') {
+      this.emit('game_event', raw as GameEventMessage)
       return
     }
 
@@ -258,6 +291,22 @@ export class BuddyLanClient extends EventEmitter {
 
   leaveRoom(): void {
     writeNdjson(this.#socket, { type: 'leave_room' })
+  }
+
+  selectGame(gameType: GameInfo['type']): void {
+    writeNdjson(this.#socket, { type: 'select_game', gameType })
+  }
+
+  setReady(ready: boolean): void {
+    writeNdjson(this.#socket, { type: 'set_ready', ready })
+  }
+
+  startGame(): void {
+    writeNdjson(this.#socket, { type: 'start_game' })
+  }
+
+  sendGameCommand(roomId: string, command: GameCommand): void {
+    writeNdjson(this.#socket, { type: 'game_command', roomId, command })
   }
 
   async listRooms(timeoutMs = 3_000): Promise<RoomInfo[]> {

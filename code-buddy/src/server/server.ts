@@ -2,13 +2,18 @@ import net from 'node:net'
 import dgram from 'node:dgram'
 import { randomUUID } from 'node:crypto'
 import type { Roll } from '../companion.js'
-import { writeNdjson, NdjsonParser } from './ndjson.js'
+import { NdjsonParser, writeNdjson } from './ndjson.js'
+import { GameRegistry } from './game/registry.js'
+import { GameRuntimeManager } from './game/runtime.js'
+import { mazeRaceGame } from './games/maze-race.js'
+import { LobbyService } from './lobby.js'
 import {
   DEFAULT_SERVER_PORT,
   PROTOCOL_VERSION,
   getMessageType,
   type AnyMessage,
   type ErrorMessage,
+  type GameCommand,
   type ProbeResult,
   type RoomInfo,
   type RoomsResponse,
@@ -17,7 +22,6 @@ import {
   type UsersResponse,
   type Welcome,
 } from './protocol.js'
-import { RoomRegistry } from './rooms.js'
 
 export type BuddyLanServer = {
   start: () => Promise<void>
@@ -46,17 +50,58 @@ export function createBuddyLanServer(
   const host = options.host ?? '0.0.0.0'
   const name = options.name ?? 'Code Buddy LAN'
   const serverId = randomUUID()
+  const lobby = new LobbyService()
+  const registry = new GameRegistry()
+  registry.register(mazeRaceGame)
 
-  const rooms = new RoomRegistry()
   const clients = new Map<string, ClientContext>()
-
   const serverInfo: ServerInfo = { id: serverId, name, port }
 
   let udpSocket: dgram.Socket | null = null
 
-  function snapshotRooms(): RoomInfo[] {
-    return rooms.listRooms()
+  function getRoomId(clientId: string): string | null {
+    return lobby.getRoomIdForMember(clientId)
   }
+
+  function snapshotUsers(): UserInfo[] {
+    return [...clients.values()].map(client => ({
+      id: client.id,
+      name: client.name,
+      roomId: getRoomId(client.id),
+    }))
+  }
+
+  function snapshotRooms(): RoomInfo[] {
+    return lobby.listRooms()
+  }
+
+  function broadcast(message: AnyMessage): void {
+    for (const client of clients.values()) {
+      writeNdjson(client.socket, message)
+    }
+  }
+
+  function broadcastToRoom(roomId: string, message: AnyMessage): void {
+    for (const client of clients.values()) {
+      if (getRoomId(client.id) !== roomId) {
+        continue
+      }
+      writeNdjson(client.socket, message)
+    }
+  }
+
+  function broadcastState(): void {
+    broadcast({ type: 'users_update', users: snapshotUsers() })
+    broadcast({ type: 'rooms_update', rooms: snapshotRooms() })
+  }
+
+  const runtime = new GameRuntimeManager(registry, lobby, {
+    listUsers: snapshotUsers,
+    broadcastToRoom: (roomId, message) => {
+      broadcastToRoom(roomId, message as AnyMessage)
+    },
+    sendToSocket: writeNdjson,
+  })
 
   const server = net.createServer(socket => {
     socket.setNoDelay(true)
@@ -71,39 +116,26 @@ export function createBuddyLanServer(
       }
     }, 5_000)
 
-    function getRoomId(clientId: string): string | null {
-      return rooms.getRoomIdForMember(clientId)
-    }
-
-    function snapshotUsers(): UserInfo[] {
-      return [...clients.values()].map(client => ({
-        id: client.id,
-        name: client.name,
-        roomId: getRoomId(client.id),
-      }))
-    }
-
     function sendError(
       error: Omit<ErrorMessage, 'type'> & { requestId?: string },
     ): void {
       writeNdjson(socket, { type: 'error', ...error } satisfies ErrorMessage)
     }
 
-    function broadcast(message: AnyMessage): void {
-      for (const client of clients.values()) {
-        writeNdjson(client.socket, message)
+    function sendServerError(message: string, requestId?: string): void {
+      if (requestId) {
+        sendError({ code: 'server_error', message, requestId })
+        return
       }
+      sendError({ code: 'server_error', message })
     }
 
-    function broadcastState(): void {
-      broadcast({ type: 'users_update', users: snapshotUsers() })
-      broadcast({ type: 'rooms_update', rooms: snapshotRooms() })
-    }
-
-    socket.on('data', chunk => {
+    socket.on('data', async chunk => {
       for (const raw of parser.push(chunk)) {
         const type = getMessageType(raw)
-        if (!type) continue
+        if (!type) {
+          continue
+        }
 
         if (type === 'probe') {
           const result: ProbeResult = {
@@ -129,7 +161,10 @@ export function createBuddyLanServer(
             continue
           }
 
-          if (typeof raw !== 'object' || raw === null) continue
+          if (typeof raw !== 'object' || raw === null) {
+            continue
+          }
+
           const payload = raw as Record<string, unknown>
           const clientName = payload['name']
           if (typeof clientName !== 'string' || !clientName.trim()) {
@@ -168,14 +203,14 @@ export function createBuddyLanServer(
             server: serverInfo,
             you: {
               id: clientId,
-              name: clientName.trim(),
+              name: context.name,
               roomId: getRoomId(clientId),
             },
             users: snapshotUsers(),
             rooms: snapshotRooms(),
+            games: runtime.listGames(),
           }
           writeNdjson(socket, welcome)
-
           broadcastState()
           continue
         }
@@ -190,27 +225,32 @@ export function createBuddyLanServer(
         }
 
         const clientId = authedClientId
+        const payload = raw as Record<string, unknown>
+        const requestId =
+          typeof payload['requestId'] === 'string' ? payload['requestId'] : undefined
 
         try {
           if (type === 'ping') {
-            if (typeof raw !== 'object' || raw === null) continue
-            const requestId = (raw as Record<string, unknown>)['requestId']
-            if (typeof requestId !== 'string' || !requestId) continue
+            const pingRequestId = payload['requestId']
+            if (typeof pingRequestId !== 'string' || !pingRequestId) {
+              continue
+            }
             writeNdjson(socket, {
               type: 'pong',
-              requestId,
+              requestId: pingRequestId,
               now: new Date().toISOString(),
             })
             continue
           }
 
           if (type === 'list_rooms') {
-            if (typeof raw !== 'object' || raw === null) continue
-            const requestId = (raw as Record<string, unknown>)['requestId']
-            if (typeof requestId !== 'string' || !requestId) continue
+            const listRequestId = payload['requestId']
+            if (typeof listRequestId !== 'string' || !listRequestId) {
+              continue
+            }
             const response: RoomsResponse = {
               type: 'rooms',
-              requestId,
+              requestId: listRequestId,
               rooms: snapshotRooms(),
             }
             writeNdjson(socket, response)
@@ -218,12 +258,13 @@ export function createBuddyLanServer(
           }
 
           if (type === 'list_users') {
-            if (typeof raw !== 'object' || raw === null) continue
-            const requestId = (raw as Record<string, unknown>)['requestId']
-            if (typeof requestId !== 'string' || !requestId) continue
+            const listRequestId = payload['requestId']
+            if (typeof listRequestId !== 'string' || !listRequestId) {
+              continue
+            }
             const response: UsersResponse = {
               type: 'users',
-              requestId,
+              requestId: listRequestId,
               users: snapshotUsers(),
             }
             writeNdjson(socket, response)
@@ -231,60 +272,117 @@ export function createBuddyLanServer(
           }
 
           if (type === 'create_room') {
-            if (typeof raw !== 'object' || raw === null) continue
-            const roomName = (raw as Record<string, unknown>)['name']
+            const roomName = payload['name']
             if (typeof roomName !== 'string' || !roomName.trim()) {
-              sendError({
+              const error = {
                 code: 'invalid_room_name',
                 message: 'Missing or invalid room name.',
-              })
+                ...(requestId ? { requestId } : {}),
+              }
+              sendError(error)
               continue
             }
 
-            const created = rooms.createRoom(roomName.trim(), clientId)
-            rooms.joinRoom(created.id, clientId)
+            const now = new Date().toISOString()
+            const created = lobby.createRoom(roomName.trim(), clientId, now)
+            lobby.joinRoom(created.id, clientId, now)
             writeNdjson(socket, { type: 'joined_room', roomId: created.id })
             broadcastState()
             continue
           }
 
           if (type === 'join_room') {
-            if (typeof raw !== 'object' || raw === null) continue
-            const roomId = (raw as Record<string, unknown>)['roomId']
+            const roomId = payload['roomId']
             if (typeof roomId !== 'string' || !roomId) {
-              sendError({
+              const error = {
                 code: 'invalid_room_id',
                 message: 'Missing or invalid roomId.',
-              })
+                ...(requestId ? { requestId } : {}),
+              }
+              sendError(error)
               continue
             }
 
-            rooms.joinRoom(roomId, clientId)
+            lobby.joinRoom(roomId, clientId, new Date().toISOString())
             writeNdjson(socket, { type: 'joined_room', roomId })
             broadcastState()
+            runtime.syncStateToSocket(socket, roomId).catch(() => {})
             continue
           }
 
           if (type === 'leave_room') {
-            rooms.leaveRoom(clientId)
+            lobby.leaveRoom(clientId, new Date().toISOString())
             writeNdjson(socket, { type: 'joined_room', roomId: null })
             broadcastState()
             continue
           }
+
+          if (type === 'select_game') {
+            const roomId = getRoomId(clientId)
+            if (!roomId) {
+              throw new Error('Join a room first.')
+            }
+            const gameType = payload['gameType']
+            if (typeof gameType !== 'string' || !registry.has(gameType)) {
+              throw new Error('Unsupported game type.')
+            }
+            lobby.selectGame(roomId, clientId, gameType, new Date().toISOString())
+            broadcastState()
+            continue
+          }
+
+          if (type === 'set_ready') {
+            const roomId = getRoomId(clientId)
+            if (!roomId) {
+              throw new Error('Join a room first.')
+            }
+            const ready = payload['ready']
+            if (typeof ready !== 'boolean') {
+              throw new Error('Invalid ready flag.')
+            }
+            lobby.setReady(roomId, clientId, ready, new Date().toISOString())
+            broadcastState()
+            continue
+          }
+
+          if (type === 'start_game') {
+            const roomId = getRoomId(clientId)
+            if (!roomId) {
+              throw new Error('Join a room first.')
+            }
+            await runtime.startGame(roomId, clientId)
+            broadcastState()
+            continue
+          }
+
+          if (type === 'game_command') {
+            const roomId = payload['roomId']
+            const command = payload['command']
+            if (typeof roomId !== 'string' || !roomId) {
+              throw new Error('Missing roomId.')
+            }
+            if (typeof command !== 'object' || command === null) {
+              throw new Error('Missing command payload.')
+            }
+            await runtime.dispatchCommand(roomId, clientId, command as GameCommand)
+            continue
+          }
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error)
-          sendError({ code: 'server_error', message })
+          sendServerError(message, requestId)
         }
       }
     })
 
     socket.on('close', () => {
-      if (closed) return
+      if (closed) {
+        return
+      }
       closed = true
-
       clearTimeout(handshakeTimeout)
+
       if (authedClientId) {
-        rooms.leaveRoom(authedClientId)
+        lobby.leaveRoom(authedClientId, new Date().toISOString())
         clients.delete(authedClientId)
         broadcastState()
       }
@@ -302,6 +400,7 @@ export function createBuddyLanServer(
         server.once('error', reject)
         server.listen(port, host, () => {
           server.off('error', reject)
+
           const udp = dgram.createSocket('udp4')
           udpSocket = udp
           udp.unref()
@@ -309,7 +408,9 @@ export function createBuddyLanServer(
           udp.on('message', (msg, rinfo) => {
             try {
               const raw = JSON.parse(msg.toString('utf8')) as unknown
-              if (getMessageType(raw) !== 'probe') return
+              if (getMessageType(raw) !== 'probe') {
+                return
+              }
 
               const result: ProbeResult = {
                 type: 'probe_result',
@@ -346,10 +447,15 @@ export function createBuddyLanServer(
         for (const client of clients.values()) {
           client.socket.end()
         }
+        runtime.stop()
+
         const closeTcp = () =>
           server.close(err => {
-            if (err) reject(err)
-            else resolve()
+            if (err) {
+              reject(err)
+            } else {
+              resolve()
+            }
           })
 
         if (udpSocket) {
