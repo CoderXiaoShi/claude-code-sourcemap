@@ -7,6 +7,7 @@ import { scanLanForBuddyServers } from './server/discovery.js'
 import { BuddyLanClient } from './server/client.js'
 import {
   DEFAULT_SERVER_PORT,
+  type ErrorMessage,
   type GameInfo,
   type GameStateSnapshot,
   type RoomInfo,
@@ -251,6 +252,32 @@ async function waitForClientEvent(
   })
 }
 
+function formatServerError(payload: unknown): string {
+  if (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'message' in payload &&
+    typeof (payload as ErrorMessage).message === 'string'
+  ) {
+    return (payload as ErrorMessage).message
+  }
+  if (payload instanceof Error) {
+    return payload.message
+  }
+  return String(payload)
+}
+
+async function dispatchAndWait(
+  client: BuddyLanClient,
+  eventNames: string | string[],
+  dispatch: () => void,
+  timeoutMs = 1_200,
+): Promise<{ event: string; payload: unknown } | null> {
+  const pending = waitForClientEvent(client, eventNames, timeoutMs)
+  dispatch()
+  return pending
+}
+
 async function chooseGameFlow(
   rl: readline.Interface,
   client: BuddyLanClient,
@@ -274,8 +301,16 @@ async function chooseGameFlow(
   }
 
   const game = client.state.games[index - 1]!
-  client.selectGame(game.type)
-  await waitForClientEvent(client, ['rooms_update', 'error'])
+  const result = await dispatchAndWait(
+    client,
+    ['rooms_update', 'error'],
+    () => client.selectGame(game.type),
+  )
+  if (result?.event === 'error') {
+    console.log(`选择游戏失败：${formatServerError(result.payload)}`)
+    await waitForContinue(rl)
+    return
+  }
   console.log(`已选择游戏：${game.name}`)
   await waitForContinue(rl)
 }
@@ -286,8 +321,16 @@ async function toggleReadyFlow(
   room: RoomInfo,
 ): Promise<void> {
   const ready = !room.readyMemberIds.includes(client.state.you.id)
-  client.setReady(ready)
-  await waitForClientEvent(client, ['rooms_update', 'error'])
+  const result = await dispatchAndWait(
+    client,
+    ['rooms_update', 'error'],
+    () => client.setReady(ready),
+  )
+  if (result?.event === 'error') {
+    console.log(`准备状态更新失败：${formatServerError(result.payload)}`)
+    await waitForContinue(rl)
+    return
+  }
   console.log(ready ? '你已准备。' : '你已取消准备。')
   await waitForContinue(rl)
 }
@@ -303,10 +346,14 @@ async function startGameFlow(
     return
   }
 
-  client.startGame()
-  const result = await waitForClientEvent(client, ['game_started', 'game_state', 'error'], 1_500)
+  const result = await dispatchAndWait(
+    client,
+    ['game_started', 'game_state', 'error'],
+    () => client.startGame(),
+    1_500,
+  )
   if (result?.event === 'error') {
-    console.log('开局失败。')
+    console.log(`开局失败：${formatServerError(result.payload)}`)
     await waitForContinue(rl)
     return
   }
@@ -350,11 +397,20 @@ async function runMazeGameMenu(
       continue
     }
 
-    client.sendGameCommand(room.id, {
-      type: 'move',
-      payload: { direction },
-    })
-    await waitForClientEvent(client, ['game_state', 'game_event', 'error'], 1_000)
+    const result = await dispatchAndWait(
+      client,
+      ['game_state', 'game_event', 'error'],
+      () =>
+        client.sendGameCommand(room.id, {
+          type: 'move',
+          payload: { direction },
+        }),
+      1_000,
+    )
+    if (result?.event === 'error') {
+      console.log(`移动失败：${formatServerError(result.payload)}`)
+      await waitForContinue(rl)
+    }
     await sleep(50)
   }
 }
@@ -401,8 +457,16 @@ async function createRoomFlow(
     return
   }
 
-  client.createRoom(name)
-  await waitForClientEvent(client, ['joined_room', 'rooms_update', 'error'])
+  const result = await dispatchAndWait(
+    client,
+    ['joined_room', 'rooms_update', 'error'],
+    () => client.createRoom(name),
+  )
+  if (result?.event === 'error') {
+    console.log(`创建房间失败：${formatServerError(result.payload)}`)
+    await waitForContinue(rl)
+    return
+  }
   console.log('已创建房间并加入。')
   await waitForContinue(rl)
 }
@@ -431,8 +495,16 @@ async function joinRoomFlow(
     return
   }
 
-  client.joinRoom(roomId)
-  await waitForClientEvent(client, ['joined_room', 'rooms_update', 'game_state', 'error'])
+  const result = await dispatchAndWait(
+    client,
+    ['joined_room', 'rooms_update', 'game_state', 'error'],
+    () => client.joinRoom(roomId),
+  )
+  if (result?.event === 'error') {
+    console.log(`加入房间失败：${formatServerError(result.payload)}`)
+    await waitForContinue(rl)
+    return
+  }
   console.log('已加入房间。')
   await waitForContinue(rl)
 }
@@ -441,8 +513,16 @@ async function leaveRoomFlow(
   rl: readline.Interface,
   client: BuddyLanClient,
 ): Promise<void> {
-  client.leaveRoom()
-  await waitForClientEvent(client, ['joined_room', 'rooms_update', 'error'])
+  const result = await dispatchAndWait(
+    client,
+    ['joined_room', 'rooms_update', 'error'],
+    () => client.leaveRoom(),
+  )
+  if (result?.event === 'error') {
+    console.log(`退出房间失败：${formatServerError(result.payload)}`)
+    await waitForContinue(rl)
+    return
+  }
   console.log('已退出房间。')
   await waitForContinue(rl)
 }
