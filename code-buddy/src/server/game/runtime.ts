@@ -55,7 +55,7 @@ export class GameRuntimeManager {
 
   async startGame(roomId: string, actorId: string): Promise<GameStateSnapshot> {
     return this.#runExclusive(roomId, async () => {
-      const room = this.#lobby.getRoom(roomId)
+      let room = this.#lobby.getRoom(roomId)
       if (!room) {
         throw new Error('Room not found.')
       }
@@ -63,13 +63,27 @@ export class GameRuntimeManager {
         throw new Error('Only room owner can start the game.')
       }
       if (!room.gameType) {
-        throw new Error('Select a game before starting.')
+        const games = this.#registry.list()
+        if (games.length === 1) {
+          room = this.#lobby.selectGame(
+            roomId,
+            actorId,
+            games[0]!.type,
+            new Date().toISOString(),
+          )
+        } else {
+          throw new Error('Select a game before starting.')
+        }
       }
       if (room.currentGameId) {
         throw new Error('This room already has a running game.')
       }
+      if (!room.gameType) {
+        throw new Error('Select a game before starting.')
+      }
 
-      const definition = this.#registry.get(room.gameType)
+      const gameType = room.gameType
+      const definition = this.#registry.get(gameType)
       const players = this.#getRoomPlayers(room)
       this.#validateStart(definition, room, players)
 
@@ -78,7 +92,7 @@ export class GameRuntimeManager {
       const runtime: ActiveRuntime = {
         roomId,
         instanceId,
-        gameType: room.gameType,
+        gameType,
         state: definition.createInitialState({
           now,
           room,
@@ -95,7 +109,7 @@ export class GameRuntimeManager {
         type: 'game_started',
         roomId,
         gameInstanceId: instanceId,
-        gameType: room.gameType,
+        gameType,
       }
       this.#hooks.broadcastToRoom(roomId, startedMessage)
 

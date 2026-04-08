@@ -149,7 +149,7 @@ function printCurrentRoomDetail(client: BuddyLanClient, room: RoomInfo): void {
   console.log(`  名称: ${room.name}`)
   console.log(`  房主: ${usersById.get(room.ownerId)?.name ?? room.ownerId}`)
   console.log(`  状态: ${room.status === 'playing' ? '进行中' : '待机中'}`)
-  console.log(`  游戏: ${game?.name ?? '未选择'}`)
+  console.log(`  游戏: ${game?.name ?? '双人闯迷宫（默认）'}`)
   console.log(`  进行中实例: ${room.currentGameId ?? '无'}`)
   console.log('  成员:')
   for (const memberId of room.memberIds) {
@@ -580,7 +580,7 @@ export async function runRoomMenu(
     printCurrentRoomDetail(client, room)
     console.log('\n1) 查看全体用户')
     console.log('2) 查看支持的游戏')
-    console.log('3) 选择游戏')
+    console.log('3) 选择游戏（当前默认迷宫）')
     console.log('4) 准备 / 取消准备')
     console.log('5) 开始游戏')
     console.log('6) 进入当前游戏')
